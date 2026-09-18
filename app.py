@@ -87,6 +87,7 @@ def registrar_peticion():
         "path": request.path,
         "full_path": request.full_path,
         "url": request.url,
+        "query_params": request.args.to_dict(flat=False),
         "user_agent": request.headers.get("User-Agent", ""),
         "content_type": request.content_type,
         "content_length_header": request.headers.get("Content-Length"),
@@ -120,6 +121,8 @@ def registrar_respuesta(respuesta):
         "method": request.method,
         "path": request.full_path,
         "status_code": respuesta.status_code,
+        "verver_format_requested": request.environ.get("verver_format_requested"),
+        "verver_query_params": request.environ.get("verver_query_params"),
         "headers": dict(respuesta.headers),
         "body": respuesta.get_data(as_text=True),
     }
@@ -168,6 +171,45 @@ def codigo_prueba(codigo):
     status = codigo if codigo in (200, 201) else 200
     body = json.dumps(JSON_BASE, ensure_ascii=False, separators=(", ", ": "))
     return respuesta_texto(body, "application/json; charset=utf-8", status)
+
+
+@app.route("/verver.php", methods=["GET", "POST", "OPTIONS", "HEAD"])
+def verver_php():
+    """Endpoint compatible con el cliente Unity que concatena verver.php."""
+    fmt = request.args.get("fmt", "json1").lower()
+    version = request.args.get("version", "1.132.6")
+    whitelist_version = request.args.get("whitelist_version", "1.8.0")
+    whitelist_sp_version = request.args.get("whitelist_sp_version", "1.0.0")
+    request.environ["verver_format_requested"] = fmt
+    request.environ["verver_query_params"] = request.args.to_dict(flat=False)
+
+    if fmt == "json1":
+        body = json.dumps({"version": version, "status": "ok"}, ensure_ascii=False, separators=(", ", ": "))
+        return respuesta_texto(body, "application/json; charset=utf-8", 200)
+    if fmt == "json2":
+        body = json.dumps({"latest_version": version, "force_update": False, "url": ""}, ensure_ascii=False, separators=(", ", ": "))
+        return respuesta_texto(body, "application/json; charset=utf-8", 200)
+    if fmt == "json3":
+        body = json.dumps({"code": 0, "msg": "ok", "data": {"version": version}}, ensure_ascii=False, separators=(", ", ": "))
+        return respuesta_texto(body, "application/json; charset=utf-8", 200)
+    if fmt == "json4":
+        body = json.dumps({"whitelist_version": whitelist_version, "whitelist_sp_version": whitelist_sp_version, "status": "ok"}, ensure_ascii=False, separators=(", ", ": "))
+        return respuesta_texto(body, "application/json; charset=utf-8", 200)
+    if fmt == "text":
+        return respuesta_texto("", "text/plain; charset=utf-8", 200)
+    if fmt == "empty":
+        return respuesta_texto("", "application/octet-stream", 200)
+    if fmt == "204":
+        return respuesta_texto("", "application/octet-stream", 204)
+
+    body = json.dumps(JSON_BASE, ensure_ascii=False, separators=(", ", ": "))
+    return respuesta_texto(body, "application/json; charset=utf-8", 200)
+
+
+@app.route("/verver.php/empty", methods=["GET", "POST", "OPTIONS", "HEAD"])
+def verver_empty():
+    request.environ["verver_format_requested"] = "path-empty"
+    return respuesta_texto("", "application/octet-stream", 200)
 
 
 @app.route("/plain", methods=["GET", "POST", "OPTIONS"])

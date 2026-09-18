@@ -21,6 +21,10 @@ FORMATOS = {
     "formato5": {"success": True, "testCodePatch": True, "resetGuest": True},
 }
 
+VER_FORMATOS = ["json1", "json2", "json3", "json4", "json5", "json6", "json7", "json8", "json9", "json10", "text", "empty", "204"]
+ACTIVE_VER_FMT = "json1"
+FMT_LOCK = threading.Lock()
+
 
 def ahora():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
@@ -127,8 +131,13 @@ def registrar_respuesta(respuesta):
         "body": respuesta.get_data(as_text=True),
     }
     print("===== RESPUESTA DETALLADA ENVIADA =====", flush=True)
-    print(json.dumps(salida, ensure_ascii=False, indent=2), flush=True)
+    texto_salida = json.dumps(salida, ensure_ascii=False, indent=2)
+    print(texto_salida, flush=True)
     print("========================================", flush=True)
+
+    # Persistir también la respuesta de /ver.php para poder correlacionarla en /debug.
+    if request.path == "/ver.php":
+        guardar_peticion(salida)
     return respuesta
 
 
@@ -173,28 +182,83 @@ def codigo_prueba(codigo):
     return respuesta_texto(body, "application/json; charset=utf-8", status)
 
 
-@app.route("/verver.php", methods=["GET", "POST", "OPTIONS", "HEAD"])
-def verver_php():
-    """Endpoint compatible con el cliente Unity que concatena verver.php."""
-    fmt = request.args.get("fmt", "json1").lower()
+def formato_actual():
+    with FMT_LOCK:
+        return ACTIVE_VER_FMT
+
+
+def establecer_formato(nombre):
+    global ACTIVE_VER_FMT
+    with FMT_LOCK:
+        ACTIVE_VER_FMT = nombre
+        return ACTIVE_VER_FMT
+
+
+@app.route("/set_fmt/<nombre>", methods=["GET", "POST", "OPTIONS"])
+def set_fmt(nombre):
+    nombre = nombre.lower()
+    if nombre not in VER_FORMATOS:
+        return respuesta_texto("formato no válido: " + nombre, "text/plain; charset=utf-8", 400)
+    establecer_formato(nombre)
+    return respuesta_texto("ok", "text/plain; charset=utf-8", 200)
+
+
+@app.route("/get_fmt", methods=["GET", "POST", "OPTIONS"])
+def get_fmt():
+    return respuesta_texto(formato_actual(), "text/plain; charset=utf-8", 200)
+
+
+@app.route("/rotar", methods=["GET", "POST", "OPTIONS"])
+def rotar():
+    actual = formato_actual()
+    siguiente = VER_FORMATOS[(VER_FORMATOS.index(actual) + 1) % len(VER_FORMATOS)]
+    establecer_formato(siguiente)
+    return respuesta_texto(siguiente, "text/plain; charset=utf-8", 200)
+
+
+@app.route("/ver.php", methods=["GET", "POST", "OPTIONS", "HEAD"])
+def ver_php():
+    """Endpoint específico para el cliente Unity que concatena ver.php."""
+    parametros = request.args.to_dict(flat=False)
+    # Un fmt explícito sirve para pruebas manuales; el cliente real usa el formato activo.
+    fmt = request.args.get("fmt", formato_actual()).lower()
     version = request.args.get("version", "1.132.6")
+    release_version = request.args.get("release_version", "OB55")
     whitelist_version = request.args.get("whitelist_version", "1.8.0")
     whitelist_sp_version = request.args.get("whitelist_sp_version", "1.0.0")
     request.environ["verver_format_requested"] = fmt
-    request.environ["verver_query_params"] = request.args.to_dict(flat=False)
+    request.environ["verver_query_params"] = parametros
 
     if fmt == "json1":
-        body = json.dumps({"version": version, "status": "ok"}, ensure_ascii=False, separators=(", ", ": "))
-        return respuesta_texto(body, "application/json; charset=utf-8", 200)
+        payload = {"version": version, "status": "ok", "force_update": False, "url": ""}
+        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
     if fmt == "json2":
-        body = json.dumps({"latest_version": version, "force_update": False, "url": ""}, ensure_ascii=False, separators=(", ", ": "))
-        return respuesta_texto(body, "application/json; charset=utf-8", 200)
+        payload = {"latest_version": version, "release_version": release_version, "status": "ok"}
+        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
     if fmt == "json3":
-        body = json.dumps({"code": 0, "msg": "ok", "data": {"version": version}}, ensure_ascii=False, separators=(", ", ": "))
-        return respuesta_texto(body, "application/json; charset=utf-8", 200)
+        payload = {"code": 0, "msg": "ok", "data": {"version": version, "whitelist_version": whitelist_version, "whitelist_sp_version": whitelist_sp_version}}
+        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
     if fmt == "json4":
-        body = json.dumps({"whitelist_version": whitelist_version, "whitelist_sp_version": whitelist_sp_version, "status": "ok"}, ensure_ascii=False, separators=(", ", ": "))
-        return respuesta_texto(body, "application/json; charset=utf-8", 200)
+        payload = {"code": 200, "message": "success", "version": version, "whitelist": {"version": whitelist_version, "sp_version": whitelist_sp_version}}
+        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+    if fmt == "json5":
+        payload = {"status": 1, "version": version, "force": 0, "url": "", "whitelist": 1}
+        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+    if fmt == "json6":
+        payload = {"result": "ok", "version": version, "update": False}
+        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+    if fmt == "json7":
+        payload = {"version": version, "url": "", "md5": "", "size": 0, "force": False}
+        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+    if fmt == "json8":
+        payload = {"ret": 0, "version": version, "data": "", "msg": ""}
+        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+    if fmt == "json9":
+        payload = {"code": 0, "version": version, "whitelist_version": whitelist_version, "whitelist_sp_version": whitelist_sp_version, "force_update": False, "update_url": ""}
+        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+    if fmt == "json10":
+        payload = {"status": "success", "data": {"version": version, "release_version": release_version}}
+        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
     if fmt == "text":
         return respuesta_texto("", "text/plain; charset=utf-8", 200)
     if fmt == "empty":
@@ -202,8 +266,15 @@ def verver_php():
     if fmt == "204":
         return respuesta_texto("", "application/octet-stream", 204)
 
-    body = json.dumps(JSON_BASE, ensure_ascii=False, separators=(", ", ": "))
-    return respuesta_texto(body, "application/json; charset=utf-8", 200)
+    # Si se solicita un nombre desconocido, continuar con json1 para no bloquear al cliente.
+    payload = {"version": version, "status": "ok", "force_update": False, "url": ""}
+    return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+
+
+@app.route("/verver.php", methods=["GET", "POST", "OPTIONS", "HEAD"])
+def verver_php():
+    """Compatibilidad con clientes antiguos que concatena verver.php."""
+    return ver_php()
 
 
 @app.route("/verver.php/empty", methods=["GET", "POST", "OPTIONS", "HEAD"])

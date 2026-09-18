@@ -25,6 +25,14 @@ VER_FORMATOS = ["json1", "json2", "json3", "json4", "json5", "json6", "json7", "
 ACTIVE_VER_FMT = "json1"
 FMT_LOCK = threading.Lock()
 
+# Rotación automática usada exclusivamente por /ver.php.
+ROTACION_FORMATOS = [
+    "json1", "json2", "json3", "json4", "json5", "json6", "json7", "json8", "json9", "json10",
+    "json11", "json12", "json13", "json14", "json15", "json16", "json17", "text", "empty", "204",
+]
+CONTADOR_VER = 0
+COUNTER_LOCK = threading.Lock()
+
 
 def ahora():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
@@ -125,6 +133,7 @@ def registrar_respuesta(respuesta):
         "method": request.method,
         "path": request.full_path,
         "status_code": respuesta.status_code,
+        "verver_request_number": request.environ.get("verver_request_number"),
         "verver_format_requested": request.environ.get("verver_format_requested"),
         "verver_query_params": request.environ.get("verver_query_params"),
         "headers": dict(respuesta.headers),
@@ -216,59 +225,89 @@ def rotar():
     return respuesta_texto(siguiente, "text/plain; charset=utf-8", 200)
 
 
+def json_body(payload):
+    return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+
+
+@app.route("/reset_contador", methods=["GET", "POST", "OPTIONS"])
+def reset_contador():
+    global CONTADOR_VER
+    with COUNTER_LOCK:
+        CONTADOR_VER = 0
+    return respuesta_texto("contador: 0\npróximo formato: json1\n", "text/plain; charset=utf-8", 200)
+
+
+@app.route("/estado", methods=["GET", "POST", "OPTIONS"])
+def estado():
+    with COUNTER_LOCK:
+        contador = CONTADOR_VER
+        siguiente = ROTACION_FORMATOS[contador % len(ROTACION_FORMATOS)]
+    texto = (
+        f"contador actual: {contador}\n"
+        f"próximo formato: {siguiente}\n"
+        f"total formatos: {len(ROTACION_FORMATOS)}\n"
+        f"formatos: {', '.join(ROTACION_FORMATOS)}\n"
+    )
+    return respuesta_texto(texto, "text/plain; charset=utf-8", 200)
+
+
 @app.route("/ver.php", methods=["GET", "POST", "OPTIONS", "HEAD"])
 def ver_php():
-    """Endpoint específico para el cliente Unity que concatena ver.php."""
+    """Endpoint Unity: cada llamada incrementa el contador y consume el siguiente formato."""
+    global CONTADOR_VER
     parametros = request.args.to_dict(flat=False)
-    # Un fmt explícito sirve para pruebas manuales; el cliente real usa el formato activo.
-    fmt = request.args.get("fmt", formato_actual()).lower()
+    with COUNTER_LOCK:
+        CONTADOR_VER += 1
+        numero = CONTADOR_VER
+        fmt = ROTACION_FORMATOS[(numero - 1) % len(ROTACION_FORMATOS)]
+
     version = request.args.get("version", "1.132.6")
     release_version = request.args.get("release_version", "OB55")
     whitelist_version = request.args.get("whitelist_version", "1.8.0")
     whitelist_sp_version = request.args.get("whitelist_sp_version", "1.0.0")
+    request.environ["verver_request_number"] = numero
     request.environ["verver_format_requested"] = fmt
     request.environ["verver_query_params"] = parametros
 
     if fmt == "json1":
-        payload = {"version": version, "status": "ok", "force_update": False, "url": ""}
-        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+        return json_body({"version": version, "status": "ok", "force_update": False, "url": ""})
     if fmt == "json2":
-        payload = {"latest_version": version, "release_version": release_version, "status": "ok"}
-        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+        return json_body({"latest_version": version, "release_version": release_version, "status": "ok"})
     if fmt == "json3":
-        payload = {"code": 0, "msg": "ok", "data": {"version": version, "whitelist_version": whitelist_version, "whitelist_sp_version": whitelist_sp_version}}
-        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+        return json_body({"code": 0, "msg": "ok", "data": {"version": version, "whitelist_version": whitelist_version, "whitelist_sp_version": whitelist_sp_version}})
     if fmt == "json4":
-        payload = {"code": 200, "message": "success", "version": version, "whitelist": {"version": whitelist_version, "sp_version": whitelist_sp_version}}
-        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+        return json_body({"code": 200, "message": "success", "version": version, "whitelist": {"version": whitelist_version, "sp_version": whitelist_sp_version}})
     if fmt == "json5":
-        payload = {"status": 1, "version": version, "force": 0, "url": "", "whitelist": 1}
-        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+        return json_body({"status": 1, "version": version, "force": 0, "url": "", "whitelist": 1})
     if fmt == "json6":
-        payload = {"result": "ok", "version": version, "update": False}
-        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+        return json_body({"result": "ok", "version": version, "update": False})
     if fmt == "json7":
-        payload = {"version": version, "url": "", "md5": "", "size": 0, "force": False}
-        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+        return json_body({"version": version, "url": "", "md5": "", "size": 0, "force": False})
     if fmt == "json8":
-        payload = {"ret": 0, "version": version, "data": "", "msg": ""}
-        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+        return json_body({"ret": 0, "version": version, "data": "", "msg": ""})
     if fmt == "json9":
-        payload = {"code": 0, "version": version, "whitelist_version": whitelist_version, "whitelist_sp_version": whitelist_sp_version, "force_update": False, "update_url": ""}
-        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+        return json_body({"code": 0, "version": version, "whitelist_version": whitelist_version, "whitelist_sp_version": whitelist_sp_version, "force_update": False, "update_url": ""})
     if fmt == "json10":
-        payload = {"status": "success", "data": {"version": version, "release_version": release_version}}
-        return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+        return json_body({"status": "success", "data": {"version": version, "release_version": release_version}})
+    if fmt == "json11":
+        return json_body({"whitelist_version": whitelist_version, "whitelist_sp_version": whitelist_sp_version, "status": "ok"})
+    if fmt == "json12":
+        return json_body({"version": version, "whitelist_version": whitelist_version, "whitelist_sp_version": whitelist_sp_version, "status": "ok", "force_update": False, "url": ""})
+    if fmt == "json13":
+        return json_body({"code": 0, "whitelist": {"version": whitelist_version, "sp_version": whitelist_sp_version}, "version": version, "url": ""})
+    if fmt == "json14":
+        return json_body({"success": True, "whitelist_version": whitelist_version, "whitelist_sp_version": whitelist_sp_version, "version": version, "force_update": False, "url": "", "token": ""})
+    if fmt == "json15":
+        return json_body({"status": "success", "data": {"whitelist_version": whitelist_version, "whitelist_sp_version": whitelist_sp_version, "version": version, "force_update": False, "url": "", "token": ""}})
+    if fmt == "json16":
+        return json_body({"ret": 0, "data": {"whitelist_version": whitelist_version, "whitelist_sp_version": whitelist_sp_version, "version": version}, "msg": "ok"})
+    if fmt == "json17":
+        return json_body({"status": 0, "msg": "", "data": {"version": version, "whitelist_version": whitelist_version, "whitelist_sp_version": whitelist_sp_version}})
     if fmt == "text":
         return respuesta_texto("", "text/plain; charset=utf-8", 200)
     if fmt == "empty":
         return respuesta_texto("", "application/octet-stream", 200)
-    if fmt == "204":
-        return respuesta_texto("", "application/octet-stream", 204)
-
-    # Si se solicita un nombre desconocido, continuar con json1 para no bloquear al cliente.
-    payload = {"version": version, "status": "ok", "force_update": False, "url": ""}
-    return respuesta_texto(json.dumps(payload, ensure_ascii=False, separators=(", ", ": ")), "application/json; charset=utf-8", 200)
+    return respuesta_texto("", "application/octet-stream", 204)
 
 
 @app.route("/verver.php", methods=["GET", "POST", "OPTIONS", "HEAD"])
